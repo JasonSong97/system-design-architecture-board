@@ -2,8 +2,9 @@ rootProject.name = 'kuke-board'
 
 // build.gradle 모음
 include 'common'
-include 'service'
+include 'common:snowflake'
 
+include 'service'
 include 'service:article'
 include 'service:article-read'
 include 'service:comment'
