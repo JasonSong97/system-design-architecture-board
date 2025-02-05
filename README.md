@@ -104,3 +104,84 @@
 - 분산 시스템에서 고유한 64비트 ID를 생성하는 알고리즘
 - [1비트][41비트:TimeStamp][10비트:노드 ID][12비트:Sequence번호]
 - 분산 환경에서도 중복 없이(노드 ID + Sequence 번호) 순차적(TimeStamp)으로 ID 생성
+
+### 대규모 데이터에서의 게시글 목록 조회
+- 대규모 데이터에서 목록 조회는 복잡하다. 왜냐하면 모든 데이터를 전부 보여줄 수 없다. 따라서 페이징이 필요하다.
+- 모든 데이터를 가져오고 특정 페이지만 추출하는 것은 비효율적이다. 또한 이 경우는 메모리에 모든 데이터가 갈 수 없기 때문에 디스크에서 가져오고 시간이 오래걸린다. 그리고 메모리 용량을 초과할 수 있다.
+- 따라서 특정 페이지의 데이터만 바로 추출하는 방법이 필요하다. 그 방법이 페이징 쿼리이다. 방법은 페이지 번호 방식과 무한 스크롤 방식으로 나뉜다.
+- 기본 페이징
+  - N번 페이지에서 M개의 게시글
+  - 게시글의 개수
+  - 샤드 키는 board_id이기 때문에 단일 샤드에서 게시글 목록 조회가 가능하다.
+  - limit = M개의 게시글
+  - offset = (N번 페이지 - 1) * M
+  - ```sql
+    select * from article
+      where board_id = {board_id} // 게시판 별
+      order by created_at desc // 최신순
+      limit {limit} offset {offset} // N번 페이지에서 M개
+    
+    // 1번 게시판, 4번 페이지에서 30건의 데이터 조회
+    select * from article
+      where board_id = 1
+      order by created_at desc
+      limit 30 offset 90;
+    ```
+  - `쿼리 시간: 5.70 sec`
+  - explain => type: ALL(풀 스캔), extra: Using where(where 조건 필터링); Using filesort(데이터가 많아 디스크에서 데이터를 정렬) => 따라서 인덱스를 사용해야 한다.
+
+### 인덱스
+- 관계형 데이터베이스에서는 주로 B+트리로 구성되어 있다. 즉, 데이터가 정렬된 상태로 저장되고, 검색 삽입 삭제 연산이 log 시간에 수행된다. 따라서 트리 구조에서 leaf node 간 연결되기 때문에 범위 검색 효율적이다.
+- 따라서 인덱스를 추가하면, 쓰기 시점에 B+트리 구조의 정렬된 상태의 데이터가 생성된다. 
+- 이미 인덱스로 지정된 컬럼에 대해 정렬된 상태를 가지고 있기 때문에, 조회 시 전체 데이터를 정렬하고 필터링할 필요가 없다. => 조회쿼리 빠름
+- ```sql
+  create index idx_board_id_article_id on article(board_id asc, article_id desc);
+  ```
+- 왜 인덱스에 생성시간이 아닌, article_id가 사용? 왜냐하면 게시글 서비스는 여러 서버로 분산되어 동시에 처리가 가능하다. 따라서 게시글이 동시에 생성될 수 있기 때문이다. 따라서 created_at을 정렬조건으로 하면 순서가 명확하지 않을 수 있다.
+- 1200만건 데이터를 넣을 때 멀티스레드로 작업을 했기 때문에 동시에 생성된 데이터가 많을 것이다.
+- 그래서 고유한 오름차순을 위해 snow flake가 적용된 article_id를 사용하는 것이다.
+- ```sql
+  select * from article
+    where board_id = {board_id}
+    order by article_id desc
+    limit {limit} offset {offset};
+  ```
+- `쿼리 시간: 0.01 sec`
+- explain => key: idx_board_id_article_id => 생성된 인덱스가 쿼리에 사용
+- 이번에는 50,000 페이지를 조 => limit 30 offset 1499970
+- `쿼리 시간: 3.46 sec`
+- explain => key: idx_board_id_article_id => 생성된 인덱스가 쿼리에 사용, 쿼리에서 변경된 것은 offset
+
+### 인덱스의 종류
+- 클러스터 인덱스(Primary Key), 세컨더리 인덱스를 알아보자. 먼저 MySQL의 기본 스토리지 엔진(DB에서 데이터 저장 및 관리 장치)은 InnoDB 다.
+- 그리고 InnoDB는 테이블마다 클러스터 인덱스를 자동 생성한다. Primary Index
+- 클러스터드 인덱스는 leaf node에 행 데이터(진짜 데이터)를 가지고 있다. 즉, Primary Key를 이용한 조회는 클러스터 인덱스로 조회를 하고 있는 것이다.
+- 우리가 생성한 인덱스는 세컨더리 인덱스다. 세컨더리 인덱스는 인덱스 컬럼 데이터와 데이터에 접근하기 위한 포인터(클러스터 인덱스를 가리키는 포인터, Primary key)를 가지고 있다.
+- 따라서 세컨더리 인덱스를 이용환 조회는 세컨더리 인덱스를 통해 Primary Key를 찾고, 클러스터 인덱스(Primary Key)를 사용해서 실제 데이터를 찾는 것이다. 따라서 인덱스 트리를 2번 탄다.
+- ```sql
+  select * from article
+    where board_id = 1
+    order by article_id desc
+    limit 30 offset 1499970;
+  ```
+- 위의 쿼리를 보면 30개의 데이터만 필요하지만 offset 0 부터 모든 데이터에 접근하는 단점이 있다. 
+- 세컨더리 인덱스는 board_id, article_id를 포함한다. 따라서 세컨더리 인덱스에서 필요한 30건에 대해서 article_id만 먼저 추출한다. 그리고 해당 30건만 클러스터 인덱스에 접근하면 된다.
+- ```sql
+  select board_id, article_id from article
+    where board_id = 1
+    order by article_id desc
+    limit 30 offset 1499970;
+  ```
+- `쿼리 시간: 0.36 sec`
+- explain => key: idx_board_id_article_id, extra: Using index(인덱스의 데이터만으로 조회를 수행할 수 있는 인덱스, 커버링 인덱스)
+- 커버링 인덱스는 클러스터 인덱스를 읽지 않고, 세컨더리 인덱스만 사용 가능한 인덱스
+- ```sql
+  select * from (
+    select article_id from article
+        where board_id = 1
+        order by article_id desc
+        limit 30 offset 1499970
+  ) t left join article on t.article_id = article.article_id;
+  ```
+- `쿼리 시간: 0.28 sec`
+- explain => article_id 추출을 위한 서브쿼리에서 파생테이블(DERIVED) 생성, 커버링 인덱스
