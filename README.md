@@ -185,3 +185,17 @@
   ```
 - `쿼리 시간: 0.28 sec`
 - explain => article_id 추출을 위한 서브쿼리에서 파생테이블(DERIVED) 생성, 커버링 인덱스
+
+### 게시글 목록 조회 - 페이지 번호 방식
+- ```sql
+  select count(*) from article where board_id = 1;
+  ```
+- `쿼리 시간: 1.97 sec`
+- explain => 커버링 인덱스로 동작
+- 공식 => (((n - 1) / k) + 1) * m * k + 1
+- ```sql
+  select count(*) from (select article_id from article where board_id = {board_id} limit {limit}) t;
+  ```
+- `쿼리 시간: 0.09 sec`
+- explain => 커버링 인덱스로 동작
+- count 쿼리에서는 limit은 동작하지 않고 전체 개수를 반환한다. 따라서 서브 쿼리에서 커버링 인덱스 limit만큼 조회하고 count하는 방식

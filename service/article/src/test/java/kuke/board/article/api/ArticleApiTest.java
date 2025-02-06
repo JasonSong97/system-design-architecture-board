@@ -1,5 +1,6 @@
 package kuke.board.article.api;
 
+import kuke.board.article.service.response.ArticlePageResponse;
 import kuke.board.article.service.response.ArticleResponse;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -58,6 +59,20 @@ public class ArticleApiTest {
         restClient.delete()
                 .uri("/v1/articles/{articleId}", 145532936912162816L)
                 .retrieve();
+    }
+
+    @Test
+    void readAllTest() {
+        ArticlePageResponse response = restClient.get()
+                .uri("/v1/articles?boardId=1&pageSize=30&page=50000") // 1번도 가능
+                .retrieve()
+                .body(ArticlePageResponse.class);
+
+        System.out.println("response.getArticleCount() = " + response.getArticleCount());
+        for (ArticleResponse article : response.getArticles()) {
+            System.out.println("article = " + article.getArticleId());
+        }
+
     }
 
     @Getter
