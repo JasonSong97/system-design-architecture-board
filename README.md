@@ -199,3 +199,17 @@
 - `쿼리 시간: 0.09 sec`
 - explain => 커버링 인덱스로 동작
 - count 쿼리에서는 limit은 동작하지 않고 전체 개수를 반환한다. 따라서 서브 쿼리에서 커버링 인덱스 limit만큼 조회하고 count하는 방식
+
+### 게시글 목록 조회 - 무한 스크롤
+- 무한 스크롤은 기준점이 중요하다. 따라서 기준점을 인덱스에서 로그 시간에 즉시 찾을 수 있기 때문에, 이무리 뒷 페이지를 가더라도 균등한 조회 속도가 보장된다.
+- ```sql
+  -- 1번 페이지(기준점 없음)
+  select * from article where board_id = {board_id} order by article_id desc limit 30;
+  
+  -- 2번 페이지 이상(기준점 = {last_article_id})
+  select * from article
+  where board_id = {board_id} and article_id < {last_article_id}
+  order by article_id desc limit 30;
+  ```
+- `쿼리 시간: 0.00 sec`
+- `쿼리 시간: 0.00 sec`
