@@ -4,6 +4,19 @@
 - 게시글
   - 게시글 조회, 게시글 생성, 게시글 수정, 게시글 삭제 API
   - 게시글 목록 조회 API(게시판별 최신순)
+    - 페이지 번호, 무한 스크롤
+- 댓글
+  - 댓글 조회, 댓글 생성, 댓글 삭제 API
+  - 댓글 목록 조회 API(계층별 오래된 순)
+    - 최대 2 뎁스
+    - 무한 뎁스
+  - 페이지 번호
+    - 인접 리스트 방식
+  - 무한 스크롤
+    - 경로 열거 방식
+  - 계층형 대댓글
+    - 하위 댓글 X => 댓글 즉시 삭제
+    - 하위 댓글 O => 댓글 삭제 표시
 
 ## 테이블 설계
 ### article
@@ -14,6 +27,15 @@
 - writer_id | BIGINT | 작성자 ID
 - created_at | DATETIME | 생성시간
 - modified_at | DATETIME | 수정시간
+
+### comment
+- comment_id | BIGINT | PK
+- content | VARCHAR(3000) | 내용
+- article_id | BIGINT | 게시글 ID(Shard Key)
+- parent_comment_id | BIGINT | 상위 댓글 ID
+- writer_id | BIGINT | 작성자 ID
+- deleted | BOOL | 삭제여부
+- created_at | DATETIME | 생성시간
 
 ## 1. 대규모 시스템 서버 인프라 기초
 
@@ -228,3 +250,6 @@
 - 유니크 정렬 숫자
   - 분산 환경에 대한 PK 중복 문제를 해결할 수 있다. 그리고 랜덤 데이터를 생성에 의한 성능 문제를 해결한다.
   - Snowflake => 문자열 방식보다는 적은 공간을 사용한다.
+
+## 3. 댓글
+- 
