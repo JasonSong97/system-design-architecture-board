@@ -252,4 +252,46 @@
   - Snowflake => 문자열 방식보다는 적은 공간을 사용한다.
 
 ## 3. 댓글
-- 
+- 계층형 구조의 댓글 목록 조회, 일반적으로 오래된 댓글이 먼저 노출된다. 또한 단순히 댓글의 생성 시간(comment_id)로는 정렬 순서가 명확하지 않다. 왜냐하면 계층 관계는 더 늦게 작성된 댓글이 먼저 노출될 수 있기 때문이다.
+- 즉, 대댓글이 먼저 위로 올라갈 수 있다. 따라서 상위 댓글은 하위 댓글보다 먼저 생성되고, 하위 댓글은 상위 댓글 별 순서로 생성된다.
+- ```sql
+  -- index
+  create index idx_article_id_parent_comment_id_comment_id on comment (
+    article_id asc,
+    parent_comment_id asc,
+    comment_id asc
+  );
+  ```
+- N번 페이지에서 M개의 댓글 조회
+- ```sql
+  select * from (
+    select comment_id from comment
+        where article_id = {article_id}
+        order by parent_comment_id asc, comment_id asc
+        limit {limit} offset {offset}
+  ) t left join comment on t.comment_id = comment.comment_id;
+  ```
+- 댓글 개수 조회
+- ```sql
+  -- 커버링 인덱스로 동작
+  select count(*) from (
+    select comment_id from comment where article_id = {article_id} limit {limit}
+  ) t;
+  ```
+- 무한 스크롤 1번페이지
+- ```sql
+  select * from comment
+    where article_id = {article_id}
+    order by parent_comment_id asc, comment_id asc
+    limit {limit};
+  ```
+- 무한 스크롤 2번 페이지 이상, 기준점 2개
+- ```sql
+  select * from comment
+    where article_id = {article_id} and (
+        parent_comment_id > {last_parent_comment_id} or
+        (parent_comment_id = {last_parent_comment_id} and comment_id > {last_comment_id})
+    ) 
+    order by parent_comment_id asc, comment_id asc
+    limit {limit};
+  ```
