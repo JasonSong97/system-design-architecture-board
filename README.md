@@ -17,6 +17,11 @@
   - 계층형 대댓글
     - 하위 댓글 X => 댓글 즉시 삭제
     - 하위 댓글 O => 댓글 삭제 표시
+- 좋아요
+  - 각 사용자는 각 게시글에 1회 좋아요를 누를 수 있다.
+    - 각 사용자는 좋아요와 취소가 가능하다.
+    - 유니크 인덱스(게시글 ID + 사용자 ID)를 사용하면 구현이 가능하다.
+  - 좋아요 수
 
 ## 테이블 설계
 ### article
@@ -45,6 +50,12 @@
 - path | VARCHAR(25) | 경로(무한뎁스가 가능 하지만, 그냥 제한으로 5뎁스 까지만)
 - deleted | BOOL | 삭제여부
 - created_at | DATETIME | 생성시간
+
+### article_like
+- article_like_id | BIGINT | PK
+- article_id | BIGINT | 게시글 ID(Shard Key)
+- user_id | BIGINT | 사용자 ID
+- created_at | DATETIME | 생성 시간
 
 ## 1. 대규모 시스템 서버 인프라 기초
 
@@ -369,4 +380,16 @@
     where article_id = {article_id} and path > {last_path}
     order by path asc
     limit {limit};
+  ```
+  
+## 4. 좋아요
+- ```sql
+  create table article_like (
+    article_like_id bigint not null primary key,
+    article_id bigint not null,
+    user_id bigint not null,
+    created_at datetime not null
+  );
+  
+  create unique index idx_article_id_user_id on article_like(article_id asc, user_id asc);
   ```
