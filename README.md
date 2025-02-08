@@ -37,6 +37,15 @@
 - deleted | BOOL | 삭제여부
 - created_at | DATETIME | 생성시간
 
+### comment_v2
+- comment_id | BIGINT | PK
+- content | VARCHAR(3000) | 내용
+- article_id | BIGINT | 게시글 ID(Shard Key)
+- writer_id | BIGINT | 작성자 ID
+- path | VARCHAR(25) | 경로(무한뎁스가 가능 하지만, 그냥 제한으로 5뎁스 까지만)
+- deleted | BOOL | 삭제여부
+- created_at | DATETIME | 생성시간
+
 ## 1. 대규모 시스템 서버 인프라 기초
 
 ### 대규모 시스템 서버 인프라 기초
@@ -293,5 +302,71 @@
         (parent_comment_id = {last_parent_comment_id} and comment_id > {last_comment_id})
     ) 
     order by parent_comment_id asc, comment_id asc
+    limit {limit};
+  ```
+  
+### 댓글 목록 조회 - 무한뎁스
+- 최대 2뎁스와 동일한 방식으로 정렬 순서를 나타내보자. 먼저 계층별 오래된 순서를 나타낼 수 있어야 한다.
+- 상위 댓글은 항상 하위 댓글보다 먼저 생성되고, 하위 댓글은 상위 댓글 별 순서대로 생성된다. 무한 뎁스에서는 상하위 댓글이 재귀적으로 무한할 수 있기 때문에, 정렬 순을 나타내기 위해 모든 상위 댓글의 정보가 필요하다.
+- parent_comment_id = 1 > 2 > 6 (표시방법) => 인덱스가 필요하다. 하지만 가변적이고 데이터 형태가 복잡하다. => 뎁스의 순서를 문자열료 표시 => 경로 열거 방식
+- xxxxx(1뎁스) | xxxxx(2뎁스) | xxxxx(3뎁스) | ....(4뎁스) => N 뎁스는 (n * 5) => 문자열로 모든 상위 댓글에서 각 댓글까지의 경로를 저장하는 방식, 따라서 각 경로를 상속하면 독립적
+- 00000 => 00000 00000, 00000 00001 => ... 00000 00001 00000, 이 경우 문자열이기 때문에 지금은 0 ~ 9 10^5 100000개의 가능성이 존재하지만, 0 ~ 9(10개) + A ~ Z(26개) + a ~ z(26개) = 62개의 문자 사용이 가능하다. 문자의 순서는 0~9 < A~Z < a~z. 따라서 62^5만큼 가능하다.
+- 따라서 문자열에 순서를 우리가 정의해야 한다. 그래서 DB에서 collation을 변경해야 한다. 디폴트는 utf8mb4_0900_ai_ci이다. 
+  - utf8mb4는 각 문자 최대 4바이트 utf8 지원, 0900은 정렬 방식 버전, ai는 악센트 비구분, ci는 대소문자 비구분 => 우리는 (0-9, A-Z, a-z)사용하기 때문에 대소문자 순서를 구분해야 한다.
+  - utf8mb4_bin으로 대소문자의 순서를 구분하게 만들 것
+- ```sql
+  create table comment_v2 (
+    comment_id bigint not null primary key,
+    content varchar(3000) not null,
+    article_id bigint not null,
+    writer_id bigint not null,
+    path varchar(25) character set utf8mb4 collate utf8mb4_bin not null,
+    deleted bool not null,
+    created_at datetime not null
+  );
+  
+  create unique index idx_article_id_path on comment_v2 (
+    article_id asc, path asc
+  );
+  
+  -- 확인
+  select table_name, column_name, collation_name from information_schema.COLUMNS
+  where table_schema = 'comment' and table_name = 'comment_v2' and column_name = 'path';
+  ```
+- descendantsTopPath 구하는 쿼리
+- ```sql
+  select path from comment_v2
+    where article_id = {article_id}
+        and path > {parentPath} -- parent 본인은 미포함 검색 조건
+        and path like {parentPath}% -- parentPath를 prefix로 하는 모든 자손 검색 조건
+  order by path desc limit 1; -- 조회 결과에서 가장 큰 path
+  ```
+- 페이지 번호, 목록 조회
+- ```sql
+  select * from (
+    select comment_id
+    from comment_v2
+    where article_id = {article_id}
+    order by path asc
+    limit {limit} offset {offset}
+  ) t left join comment_v2 on t.comment_id = comment_v2.comment_id;
+  ```
+- 페이지 번호, 카운트 조회
+- ```sql
+  select count(*) from (
+    select comment_id from comment_v2 where article_id = {article_id} limit {limit}
+  ) t;
+  ```
+- 무한 스크롤, 1번 페이지
+- ```sql
+  select * from comment_v2
+    where article_id = {article_id}
+    order by path asc limit {limit};
+  ```
+- 무한 스크롤, 2번 페이지 이상 => 기준점은 last_path
+- ```sql
+  select * from comment_v2
+    where article_id = {article_id} and path > {last_path}
+    order by path asc
     limit {limit};
   ```

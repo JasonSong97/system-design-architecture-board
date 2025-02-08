@@ -1,87 +1,30 @@
 package kuke.board.comment.repository;
 
-import kuke.board.comment.entity.Comment;
+import kuke.board.comment.entity.CommentV2;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 @Repository
-public interface CommentRepository extends JpaRepository<Comment, Long> {
+public interface CommentRepositoryV2 extends JpaRepository<CommentV2, Long> {
 
-    @Query(
-            value = "select count(*) from (" +
-                    "   select comment_id from comment " +
-                    "   where article_id = :articleId and parent_comment_id = :parentCommentId " +
-                    "   limit :limit" +
-                    ") t",
-            nativeQuery = true
-    )
-    Long countBy( // 자식 댓글의 개수를 구하는 쿼리
-            @Param("articleId") Long articleId,
-            @Param("parentCommentId") Long parentCommentId,
-            @Param("limit") Long limit
+    @Query("select c from CommentV2  c where c.commentPath.path = :path")
+    Optional<CommentV2> findByPath(
+            @Param("path") String path
     );
 
     @Query(
-            value = "select comment.comment_id, comment.content, comment.parent_comment_id, comment.article_id, " +
-                    "comment.writer_id, comment.deleted, comment.created_at " +
-                    "from (" +
-                    "   select comment_id from comment where article_id = :articleId " +
-                    "   order by parent_comment_id asc, comment_id asc " +
-                    "   limit :limit offset :offset " +
-                    ") t left join comment on t.comment_id = comment.comment_id",
+            value = "select path from comment_v2 " +
+                    "where article_id = :articleId and path > :pathPrefix and path like :pathPrefix " +
+                    "order by path desc limit 1",
             nativeQuery = true
     )
-    List<Comment> findAll(
+    Optional<String> findDescendantsTopPath(
             @Param("articleId") Long articleId,
-            @Param("offset") Long offset,
-            @Param("limit") Long limit
-    );
-
-    @Query(
-            value = "select count(*) from (" +
-                    "   select comment_id from comment where article_id = :articleId limit :limit " +
-                    ") t",
-            nativeQuery = true
-    )
-    Long count(
-            @Param("articleId") Long articleId,
-            @Param("limit") Long limit
-    );
-
-    @Query(
-            value = "select comment.comment_id, comment.content, comment.parent_comment_id, comment.article_id, " +
-                    "comment.writer_id, comment.deleted, comment.created_at " +
-                    "from comment " +
-                    "where article_id = :articleId " +
-                    "order by parent_comment_id asc, comment_id asc " +
-                    "limit :limit",
-            nativeQuery = true
-    )
-    List<Comment> findAllInfiniteScroll(
-            @Param("articleId") Long articleId,
-            @Param("limit") Long limit
-    );
-
-    @Query(
-            value = "select comment.comment_id, comment.content, comment.parent_comment_id, comment.article_id, " +
-                    "comment.writer_id, comment.deleted, comment.created_at " +
-                    "from comment " +
-                    "where article_id = :articleId and ( " +
-                    "   parent_comment_id > :lastParentCommentId or " +
-                    "   (parent_comment_id = :lastParentCommentId and comment_id > :lastCommentId)" +
-                    ")" +
-                    "order by parent_comment_id asc, comment_id asc " +
-                    "limit :limit",
-            nativeQuery = true
-    )
-    List<Comment> findAllInfiniteScroll(
-            @Param("articleId") Long articleId,
-            @Param("lastParentCommentId") Long lastParentCommentId,
-            @Param("lastCommentId") Long lastCommentId,
-            @Param("limit") Long limit
+            @Param("pathPrefix") String pathPrefix
     );
 }

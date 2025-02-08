@@ -12,6 +12,6 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.MySQLDialect
     open-in-view: false
-    show-sql: true
+    show-sql: false
     hibernate:
       ddl-auto: none # 컨테이너에서 직접 작업하기 때문에
