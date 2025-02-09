@@ -62,6 +62,14 @@
 - like_count | BIGINT | 좋아요 수
 - version | BIGINT | 낙관적 락 버전 컬럼
 
+### board_article_count
+- board_id | BIGINT | PK(Shard Key) => 게시글 서비스의 article 테이블과 동일한 샤드 키
+- article_count | BIGINT | 게시글 수
+
+### article_comment_count
+- article_id | BIGINT | PK(Shard Key) => 댓글 서비스의 comment 테이블과 동일한 샤드 키
+- comment_count | BIGINT | 댓글 수
+
 ## 1. 대규모 시스템 서버 인프라 기초
 
 ### 대규모 시스템 서버 인프라 기초
@@ -458,3 +466,6 @@
 - 비싸다.
   - 비동기 처리를 위한 시스템 구축 비용 + 데이터 일관서 관리를 위한 비용(대기역에서 중복/누락 없이 반드시 1회 실행 보장되기 위한 시스템 구축이 필요하다.)
   - 실시간으로 결과 응답이 안되기 때문에 클라이언트 측 추가 처리 필요하다.(이미 처리된 것처럼 보이게 또는 실패 시 알림주기)
+
+### 게시글 수, 댓글 수
+- 게시글 수와 댓글 수도 좋아요 수와 동일한 방법으로 만들 수 있다. => 비관적 락 1번
