@@ -1,2 +1,21 @@
 server:
   port: 9003
+
+spring:
+  application:
+    name: kuke-board-view-service
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/article_view
+    username: root
+    password: root
+  jpa:
+    database-platform: org.hibernate.dialect.MySQLDialect
+    open-in-view: false
+    show-sql: true
+    hibernate:
+      ddl-auto: none # 컨테이너에서 직접 작업하기 때문에
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
