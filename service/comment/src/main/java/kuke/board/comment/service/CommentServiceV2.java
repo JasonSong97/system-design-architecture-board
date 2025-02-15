@@ -1,16 +1,14 @@
 package kuke.board.comment.service;
 
 import kuke.board.comment.entity.ArticleCommentCount;
-import kuke.board.comment.entity.Comment;
 import kuke.board.comment.entity.CommentPath;
 import kuke.board.comment.entity.CommentV2;
 import kuke.board.comment.repository.ArticleCommentCountRepository;
-import kuke.board.comment.repository.CommentRepository;
 import kuke.board.comment.repository.CommentRepositoryV2;
 import kuke.board.comment.service.request.CommentCreateRequestV2;
 import kuke.board.comment.service.response.CommentPageResponse;
 import kuke.board.comment.service.response.CommentResponse;
-import kuke.board.common.snowflake.Snowflake;
+import kuke.board.common.event.Snowflake;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
