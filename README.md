@@ -552,3 +552,56 @@
   - 사용자의 게시글 조회수 증가에 대해서 10분 간 분산 락을 획득, 분산 락이 점유되면, 다른 요청은 락이 10분 후 해제되기 까지, 락을 추가로 점유할 수 없다.
 - 시나리오 => 동일한 사용자 중 1번째 요청으로 조회수 증가 요청이 오면, 이전에 점유되지 않았기 때문에 setIfAbsent=True(분산 락 획득), 후에 동일 게시글에 동일 사용자가 분산 락을 요청하면 setIfAbsent=False가 나온다.
 - Redis는 싱글 스레드로 동작하고, setIfAbsent는 원자적을 처리되기 때문에 동시성 고려는 필요가 없다.
+
+## 6. 인기글
+
+### kafka
+- 분산 이벤트 스트리밍 플랫폼이면서 대규모 데이터를 실시간으로 처리하기 위해 사용한다. 따라서 고성능, 확장성, 내구성, 가용성이 필요하다.
+- 먼저 Producer 는 데이털를 생산하는 사람이고, Consumer 는 데이터를 소비하는 사람이다. 따라서 Producer 가 Consumer 에게 데이터를 전송하는 것이 주 목적이다. 직접적인 방법은 API 통신을 하는 것이다. 이 경우는 Producer와 Consumer가 직접적인 연결이 된다. 만약 이 구조에서 Consumer에서 장애가 발생 하면 데이터가 유실될 수 있다.
+- 따라서 간접적인 방법이 필요하다. 그래서 Producer와 Consumer 사이에 Message Queue에 데이터를 전송을 대신하게 만들 수 있다. 이 경우는 장애 전파될 위험은 감소하고 데이터 유실 위험성도 낮아진다. 또한 직접적인 동기처리가 아닌 비동기로 처리가 된다.
+- 만약 Producer, Consumer가 많아지면, 처리할 데이터가 늘어나고 Message Queue에서 장애가 발생할 확률도 올라간다. 또한 데이터에 대해 복잡한 라우팅이 생긴다. 그래서 단일 Message Queue로는 대규모 데이터를 처리하기 힘들다. 따라서 여러 Message Queue를 만들고 Message Broker를 만들어 Message Broker에서 Message Queue를 관리하도록 만들다. 이 경우는 대규모 데이터를 병렬로 처리하고 복잡한 데이터 요구사항을 처리한다.
+- 그래도 만약 Producer의 생산량이 Consumer소비량보다 많거나 Broker의 처리량을 많으면, 안전할까? 리소스 부족으로 장애가 전파된다. 따라서 Consumer가 Broker로부터 데이터를 받는 것이 아니라. Pull 하도록 만들면 된다. 즉 Consumer는 자기의 처리량에 따라서 조절하는 것이다.
+- 그래서 Producer가 Publish(생산)을 하면 Consumer는 구독(Subscribe)해서 가져오는 것이다. pub/sub 패턴이 만들어진다.
+- 따라서 Kafka Broker는 데이터를 중개 및 처리해주는 애플리케이션 실행 단위를 제공한다. 그래서 Producer는 Broker에 데이터를 생산하고, Consumer는 Broker에서 데이터를 소비한다. 그래서 Producer와 Consumer는 다양한 형태의 데이터를 처리해야 한다. 그러면 Kafka는 어떻게 데이터들을 구분할까?
+- Kafka는 데이터를 구분하기 위해서 topic이라는 단위를 사용한다. 즉, Producer는 topic 단위로 이벤트를 생산 및 전송하고, Consumer는 topic 단위로 이벤트를 구독 및 취소한다.
+- 만약 처리하는 데이터가 많아지면 1대의 Broker가 모든 것을 처리할 수 있을까? 처리량을 늘릴 수 있는 방법은? => 여러 대의 Kafka Broker를 연결해서 Cluster를 이루게 하고, 처리량을 늘릴 수 있다. topic은 데이터를 구분하는 논리적 구분 단위이기 때문에, 여러 Broker에서 병렬 처리 함으로써 처리량을 늘릴 수 있다. 그러면 어떻게 topic들이 여러 Broker로 분산되는 것일까?
+- 각 topic은 partition 단위로 물리적으로 분산될 수 있다. 따라서 Producer는 1개의 topic의 n개의 partition으로 분산하여 데이터를 처리하고, Consumer는 topic의 partition 단위로 데이터를 처리하는 것이다. 만약 3대의 Broker가 있는 경우, 각 topic의 모든 partition을 1대의 Broker에서 처리할 필요가 없다. 따라서 Kafka에서 각 topic의 partition은 여러 Broker에 균등하게 분산될 수 있다. 물리적으로 분산된 여러 개의 partition에 대해 각 Broker가 분산 처리할 수 있는 것이다. 따라서 Consumer들은 partition 단위로 구독하여 데이터를 처리한다.
+  - EX) (topic1, partition1), (topic1, partition3) => consumer2
+- partition 단위로 분산된 상황에서 순서를 고려한 처리는? => partition 단위로 데이터가 처리되기 떄문에, Producer는 topic에 생산되는 이벤트에 대해 직접 partition을 지정할 수 있고, partition을 지정하지 않는다면 RR방식으로 적절히 분산할 수 있다. 즉, 순서 보장이 필요한 이벤트들에 대해서는 동일한 partition으로 보내준다.
+- 만약 특정 Broker에 장애가 발생하는 경우는? => 이 경우는 해당 Broker에 적용되어 있는 데이터는 유실된다. 따라서 복제를 해야한다. `replication factor = 3` 설정을 하면, 각 partition의 데이터는 3개로 복제된다. leader에 데이터를 쓰면, follower로 데이터가 복제된다. 각 복제본은 Kafka에서 여러 Broker간에 균등하게 분산해준다.
+  - EX) 만약 Broker 2에 장애가 발생해도, Broker 1과 3에 follower(복제본)이 존재해서 데이터 생산 및 소비를 계속 처리할 수 있다. 그래서 Kafka Cluster에서 특정 Broker에 장애가 발생했더라도, 복구될 때 까지 정상 Broker를 활용할 수 있다.
+  - 하지만 이러한 시스템을 위한 데이터 복제 과정에는 추가적인 비용이 발생한다. Producer는 모든 복제가 완료될 때까지 기다려야할까?
+    - Producer, `acks = 0` => Broker에 데이터 전달되었는지 확인하지 않음. 매우 빠르지만, 데이터 유실 가능성 존재
+    - `acks = 1` => leader에 전달되면 성공. follower 전달 안되면 장애 시에 유실 가능성 있으나, acks = 0보다 안전
+    - `acks = all` => leader와 모든 follwer(min.insync.replicas 만큼)에 데이터 기록되면 성공. 가장 안전하지만 지연 가능성 존재
+      - min.insync.replicas : 데이터 전송 성공으로 간주하기 위해 최소 몇 개의 ISR(In-Sync Replicas, leader의 데이터가 복제본으로 동기화되어 있는 follower들을 의미, acks = all 설정일 때 함께 동작)이 있어야하는지 설정
+      - EX) acks = all, min.insync.replicas = 2, replication factor = 3 => 각 partition은 3개로 복제 되어야 하지만, Producer는 2개의 데이터만 확실하게 쓰면 성공 응답을 받는다. 2개(min.insync.replicas)의 복제는 동기적으로 확인, 3개(replication factor)의 복제는 비동기적으로 확인
+      - 따라서 만약, Broker 2(topic1, partition2)에서 장애가 생기는 경우, Broker 1, 3겡 복제되어 있기 때문에, 정상 Broker에서 leader를 재선출하고, 이벤트 생산 및 소비를 계속 처리한다. 또한 min.insync.replicas = 2 이기 때문에, Producer는 Broker1과 Broker3에 데이터 전송을 정상적으로 성공한다.
+- Kafka는 데이터를 어떻게 관리할까? => Kafka는 순서가 보장된 데이터 로그를 각 topic의 partition 단위로 Broker의 디스크에 저장한다. 그리고 각 데이터는 고유한 offset을 가지고 있다. 따라서 Consumer는 offset을 기반으로 데이터를 읽어간다.
+  - EX) (topic1, partition1) [0][1][2][3][4][5][6][7][8], 만약 offset을 4까지 읽었으면 그 다음에는 5부터 읽기 시작하면 된다. 만약 새로운 Consumer가 다른 목적으로 데이터를 처리해야 한다면? 새로운 Consumer는 기존의 Consumer들과 달리 다른 목적을 가지고 병렬로 데이터를 처리해야할 수도 있다. 따라서 모든 Consumer가 전역적으로 동일한 offset을 사요할 수 없다. 서로 다른 offset이 관리되어야 한다.
+  - 그래서 Consumer Group이라는 개념이 나온다. offset은 Consumer Group단위로 관리가 된다. 즉, 여러 Consumer가 동일한 Consumer Group이라면, 각 topic의 각 partition에 대해 동일한 offset을 공유한다. Consumer Group을 달리하면, 별도의 목적ㅇ으로 동일한 데이터를 병렬로 처리할 수 있는 것이다.
+- Broker, Topic, Partition, Consumer Group, Offset는 누가 관리하는 것일까? Zookeeper가 kafka에서 등장하는 메타데이터를 관리한다. zookeeper도 고가용성을 위해서 여러 대를 연결하여 클러스터를 이룰 수 있다. 하지만 zookeeper에 의존성이 생기므로 더욱 복잡한 구조가 된다.
+  - kafka 2.8 이후 => 메타데이터 관리에 대해 kafka broker 자체적으로 관리 가능. 따라서 `KRaft모드`로 Zookeeper 의존성을 제거하여, 더 간단한 구조가 가능하다. (KRaft모드 Broker 1대 사용 예정)
+- 현재 프로젝트
+  - article | article-topic(article 서비스에서 생산하는 데이터, 각 서비스에서 생산한 이벤트)
+  - comment | comment-topic(comment 서비스에서 생산하는 데이터, 각 서비스에서 생산한 이벤트)
+  - like | like-topic(like 서비스에서 생산하는 데이터, 각 서비스에서 생산한 이벤트)
+  - view | view-topic(view 서비스에서 생산하는 데이터, 각 서비스에서 생산한 이벤트)
+  - hot article 서비스의 모든 서버 군은 hot article Consumer Group으로 그룹화되고, 필요한 토픽을 구독하여 데이터를 처리한다.
+  - article read 서비스의 모든 서버 군도 article read Consumer Group으로 그룹화되고, 필요한 토픽을 구독한다.
+  - hot article, article read 서비스는 Consumer Group을 달리하기 때문에, Producer가 생산한 이벤트를 목적에 따라 병렬로 처리할 수 있다.
+- 개념 정리
+  - Producer : 카프카로 데이터를 보내는 클라이언트, 데이터를 생산 및 전송, Topic 단위로 데이터 전송
+  - Consumer : 카프카에서 데이터를 읽는 클라이언트, 데이터를 소비 및 처리, Topic 단위로 구독하여 데이터 처리
+  - Broker : 카프카에서 데이터를 중개 및 처리해주는 애플리케이션 실행 단위, Producer와 Consumer 사이에서 데이터를 주고 받는 역할
+  - Kafka Cluster : 여러 개의 Broker가 모여서 하나의 분산형 시스템을 구성한 것, 대규모 데이터에 대해 고성능, 안정성, 확장성, 고가용성 등 지원 => 데이터의 복제, 분산 처리, 장애 복구
+  - Topic : 데이터가 구분되는 논리적인 단위, 게시글 이벤트를 위한 article-topic, 댓글 이벤트를 위한 comment-topic
+  - Partition : Topic이 분산되는 단위, 각 Topic은 여러 개의 Partition으로 분산 저장 및 병렬 처리된다. 각 Partition 내에서 데이터가 순차적으로 기록되므로, Partition 간에는 순서가 보장되지 않는다. Partition은 여러 Broker에 분산되어 Cluster 확장성을 높인다.
+  - Offset : 각 데이터에 대해 고유한 위치(데이터는 각 Topic의 Partition 단위로 순차적으로 기록되고, 기록된 데이터는 offset을 가진다.), Consumer Group은 각 그룹이 처리한 offset을 관리한다.(데이터를 어디까지 읽었는지)
+  - Consumer Group : Consumer Group은 각 Topic의 Partition 단위로 offset을 관리한다.(인기글 서비스를 위한 Consumer Group, 조회 최적화 서비스를 위한 Consumer Group), Consumer Group 내의 Consumer들은 데이터를 중복해서 읽기 않을 수 없다. Consumer Group 별로 데이터를 별렬로 처리할 수 있다.
+- 도커 카프카 설치 => `docker run -d --name kuke-board-kafka -p 9092:9092 apache/kafka:3.8.0`
+- 도커 kfka 컨테이너 토픽 생성 => `docker exec --workdir /opt/kafka/bin/ -it kuke-board-kafka sh` 컨테이너 접속 
+  - `./kafka-topics.sh --bootstrap-server localhost:9092 --create --topic kuke-board-article --replication-factor 1 --partition 3`
+  - `./kafka-topics.sh --bootstrap-server localhost:9092 --create --topic kuke-board-comment --replication-factor 1 --partition 3`
+  - `./kafka-topics.sh --bootstrap-server localhost:9092 --create --topic kuke-board-like --replication-factor 1 --partition 3`
+  - `./kafka-topics.sh --bootstrap-server localhost:9092 --create --topic kuke-board-view --replication-factor 1 --partition 3`
