@@ -46,13 +46,13 @@ public class HotArticleListRepository {
         return generateKey(TIME_FORMATTER.format(time));
     }
 
-    private String generateKey(String dataStr) {
-        return KEY_FORMAT.formatted(dataStr);
+    private String generateKey(String dateStr) {
+        return KEY_FORMAT.formatted(dateStr);
     }
 
-    public List<Long> readAll(String dataStr) {
+    public List<Long> readAll(String dateStr) {
         return redisTemplate.opsForZSet()
-                .reverseRangeWithScores(generateKey(dataStr), 0, -1).stream()
+                .reverseRangeWithScores(generateKey(dateStr), 0, -1).stream()
                 .peek(tuple ->
                         log.info("[HotArticleListRepository.readAll] articleId={}, score={}", tuple.getValue(), tuple.getScore()))
                 .map(ZSetOperations.TypedTuple::getValue)
