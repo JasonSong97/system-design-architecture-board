@@ -82,6 +82,18 @@
 - article_id | BIGINT | PK(Shard Key)
 - view_count | BIGINT | 조회수
 
+### outbox
+- outbox_id | BIGINT | PK(Shard Key)
+- event_type | VARCHAR(100) | 이벤트 타입
+- payload | VARCHAR(5000) | 이벤트 데이터
+- shard_key | BIGINT | 샤드 키
+- created_at | DATETIME | 생성일시
+
+```
+샤딩이 고려된 DB + 트랜잭션은 각 샤드에서 단일 트랜잭션으로 빠르고 안전하게 수행 + 여러 샤드간에 분산 트랜잭션을 지원하는 DB도 있으나, 성능이 다소 떨어짐
+Outbox Table에 이벤트 데이터 기록과 비즈니스 로직에 의한 상태 변경이 동일한 샤드에서 단일 트랜잭션으로 처리될 수 있도록 함
+```
+
 ## 1. 대규모 시스템 서버 인프라 기초
 
 ### 대규모 시스템 서버 인프라 기초
@@ -642,3 +654,83 @@
 - 인기글 서비스는 다른 서비스로부터 이벤트를 개별적으로 받는다. 즉, 현재의 좋아요 수나 이런 것들이 이벤트 정보에 포함되지 않는 다는 것이다. 따라서 다른 데이터에 대해 현재의 상태를 알아야 한다. 이러한 데이터를 받아오기 위해 각 서비스에 API 요청을 할 수 있지만 다른 서비스와 결합을 하기 때문에 인기글 작업으로 각 서비스에 부하가 전달된다.
 - 다른 서비스가 인기글을 위한 데이터를 생산하고 관리할 책임은 없다. 즉, 이러한 데이터를 생산하고 관리할 책임은 인기글에게 있는 것이다. 따라서 인기글 서비스가 인기글에 피룡한 데이털를 자체적으로 보관하는 케이스를 생각하자. 이벤트로 전달 받은 우너본 데이터를 기반으로 인기글 선정에 필요한 데이터를 자체적으로 가공 및 생산할 수도 있다. 다른 서비스에 의존하지 않고, 독립적으로 인기글 기능을 제공해나갈 수 있는 것이다.
 - 따라서 점수 계산에 필요한 데이터를 실시간으로 다시 요청하지 않고, 자체적인 데이터를 가지도록 만들자. 이러한 데이터는 하루만 보관하면 되므로, 용량이 크진 않지만 접근이 빠르고 휘발성을 가지는 Redis를 사용하자.
+
+### Transactional Messaging Queue
+- 데이터 일관성, 원자성 관리를 위해 트랜젝션 관리는 중요하다.
+- Producer(비즈니스 로직, 게시글/댓글/좋아요/조회수 서비스) => 이벤트 전송(게시글/댓글/좋아요/조회수 이벤트) => Kafka <= 이벤트 처리 <= Consumer
+- Consumer에서 이벤트 처리를 정상적으로 모두 완료한 이후에 offset을 commit 하면, 데이터의 유실 없이 처리할 수 있다.
+- 또한 Producer에서 kafka로 이벤트를 전송하는 과정이 장애가 생겼다고 해도, Producer내부의 비즈니스 로직 수행은 롤백되면 안된다. 따라서 이런 상황에서는, 게시글은 정상 생성되었더라도, 이러한 이벤트를 Kafka에 전달할 수 없는 상황이다.
+- 신뢰할 수 있는 시스템인 Kafka로 아직 데이터가 전송되지 못했기 때문에, Producer가 생산 및 전파해야 하는 이벤트 데이터는 유실될 수 밖에 없다. 이로 인해 각 서비스마다 데이터의 일관성이 깨지게 된다. Producer에서 게시글이 생성되었는데, Consumer에서 게시글 생성 사실을 전달 받지 못하는 상황이 되는 것이다.
+- 이 문제를 비즈니스 로직 수행과 이벤트 전송이 하나의 트랜잭션으로 처리되어야 한다. 이러한 보장은 꼭 실시간으로 처리될 필요는 없다. 비즈니스 로직은 우선적으로 처리되더라도, 이벤트 전송은 장애가 해소된 이후 뒤늦게 처리되어도 충분할 수 있다.(Eventually Consistency)
+- 트랜잭션 순서 고민
+  - ```sql
+    transaction start
+    비즈니스로직수행
+    commit or roll back
+    
+    transaction start
+    비즈니스로직수행
+    publishEvent()
+    commit or roll back
+    -- 지금까지 사용하던 트랜잭션은 MySQL의 단일 DB(1개의 샤드)에 대한 트랜잭션이다. 
+    -- MySQL의 상태변경과 Kafka로의 데이터 전송을, MySQL의 트랜잭션 기능을 이용해서 단일 트랜잭션으로 묶을 수 없다. 왜냐하면 MySQL과 Kafka는 서로 다른 시스템이기 때문이다.
+    -- 만약, publishEvent()에서 3초간의 장애가 생기는 경우, Kafka의 장애가 서버 애플리케이션과 MySQl로 장애가 전파될 수도 있다. 또는 트랜잭션 commit이 실패했는데, 이벤트 전송은 이미 완료 됐을 수 있다.
+    -- 만약, 3번 과정을 비동기로 처리한다면? 비동기로 처리된 이벤트 전송이 실패한다고 해서, MySQL의 트랜잭션이 자동으로 롤백되진 않는다. 롤백을 위한 보상 트랜잭션을 직접 수행할 수 있지만 복잡하다.
+    ```
+- 2개의 다른 시스템을 어떻게 단일한 트랜잭션으로 묶을까? 분산 시스템 간의 트랜잭션 관리가 필요하다. Distributed Transaction
+- Transactional Messaging : 메시지 전송과 타 시스템 작업 간에 분산 트랜잭션을 보장하는 방법
+- Transactional Messaging 을 달성하기 위한 분산 트랜잭션의 방법들
+  - `Two Phase Commit`
+    - 분산 시스템에서 모든 시스템이 하나의 트랜잭션을 수행할 때, 모든 시스템이 성공적으로 작업을 완료하면 commit, 1개라도 실패하면 rollback
+    - `Prepare phase(준비 단계)`
+      - Coordinator는 각 참여자에게 트랜잭션 커밋할 준비가 되었는지 물어본다. 각 참여자는 트랜잭션을 커밋할 준비가 되었는지 응답한다.
+    - `Commit phase(커밋 단계)`
+      - 모든 참여자가 준비 완료 응답을 보내면, Coordinator는 모든 참여자에게 트랜잭션 커밋을 요청한다. 모든 참여자는 트랜잭션을 커밋한다.
+    - 문제점
+      - 모든 참여자의 응답을 기다려야 하기 때문에 지연이 길어진다. 또한 Coordinator 또는 참여자 장애가 발생하면, 참여자들은 현재 상태를 모른 채 대기해야 한다. 또한 트랜잭션의 복구 처리가 복잡해질 수 있다.
+      - 성능 및 오류 처리의 복잡성 문제가 있고, Kafka와 MySQL은 자체적으로 이러한 방식의 트랜잭션을 지원하지 않는다. 따라서 Two Phase Commit은 Transactional Messaging을 달성하기에 적절하지 않다.
+  - `Transactional Outbox`
+    - 이벤트 전송 작업을 일반적인 DB 트랜잭션에 포함할 수 없다. 하지만, 이벤트 전송 정보를 DB 트랜잭션에 포함하여 기록할 수 있다.
+    - 트랜잭션을 지원하는 DB에 Outbox 테이블을 생성하고, 서비스 로직 수행과 Outbox 테이블 이벤트 메시지 기록을 단일 트랜잭션으로 묶는다.
+    - ```
+      1. 비즈니스 로직 수행 및 Outbox 테이블 이벤트 기록
+        1. transaction start
+        2. 비즈니스 로직 수행
+        3. Outbox 테이블에 전송 할 이벤트 데이터 기록
+        4. commit or abort
+      2. Outbox 테이블을 이용한 이벤트 전송 처리
+        1. Outbox 테이블 미전송 이벤트 조회
+        2. 이벤트 전송
+        3. Outbox 테이블 전송 완료 처리
+      ```
+    - 데이터 생성/삭제/수정 요청 => Client => Data Table 상태 변경 + Outbox Table 이벤트 삽입 => DB(Transaction[Data Table, OutboxTable]) <= Message Relay => 이벤트 전송 => Message Broker
+      - Message Relay는 이벤트 전송이 정상적으로 완료되면, Outbox 테이블의 이벤트를 완료 상태로 변경한다.
+    - Message Relay : Outbox Table에서 미전송 이벤트를 조회 + Message Broker로 이벤트를 전송하는 역할
+    - Two Phase Commit의 성능과 오류 처리에 대한 문제가 줄어든다. 또한 DB 트랜잭션 커밋이 완료되었다면, Outbox 테이블에 이벤트 정보가 함께 기록되었기 때문에, 이벤트가 유실되지 않는다.
+    - 추가적인 Outbox 테이블 생성 및 관리가 필요하다. Outbox 테이블의 미전송 이벤트를 Message Broker로 전송하는 작업이 필요하다.
+    - 어떻게 Message Broker로 이벤트를 전송하는 작업을 할까? => 이벤트 전송 작업을 처리하기 위한 시스템 구축 or Transaction Log Tailing Pattern 활용
+  - `Transaction Log Tailing`
+    - DB의 트랜잭션 로그를 추적 및 분석하는 방법. DB는 각 트랜잭션의 변경 사항을 로그로 기록한다. => MysQL binlog, PostgreSQL WAL, SQL Server Transaction Log ..
+    - 이러한 로그를 읽어서 Message Broker에 이벤트를 전송해볼 수 있다. => CDC(Change Data Capture) 기술을 활용하여 데이터의 변경 사항을 다른 시스템에 전송한다. / 변경 데이터 캡처 : 데이터 변경 사항을 추적하는 기술
+    - 데이터 생성/삭제/수정 요청 => Client => Data Table 상태 변경 + Outbox Table 이벤트 삽입 => DB(Transaction[Data Table, OutboxTable], Transaction Log) <= Transaction Log 조회 <= Transaction Log Miner => 이벤트 전송 Message Broker
+      - 만약, Data Table을 직접 추적한다면, Outbox Table 미사용할 수 있다. 즉, 데이터 변경에 대한 것을 직접 추적하면 된다.
+    - DB에 저장된 트랜잭션 로그를 기반으로, Message Broker로의 이벤트 전송 작업을 구축하기 위한 방법으로 활용될 수 있다. Data Table을 직접 추적하면, Outbox Table은 미사용 할 수도 있다.
+    - 트랜잭션 로그를 추적하기 위해 CDC 기술을 활용해야 한다. 이 경우는 추가적인 학습 및 운영 비용이 생긴다.
+- Transaction Outbox 사용
+  - Outbox Table의 필요성 => Transaction Log Tailing을 활용하면 Data Table의 변경 사항을 직접 추적할 수 있다. (Outbox Table이 필요하지 않을 수 있다.) 하지만, Data Table은 메시지 정보가 DB 변경 사항에 종속된 구조로 한정 된다.
+  - Outbox Table을 활용하면, 부가적인 테이블로 인한 복잡도 및 관리 비용은 늘어나지만, 이벤트 정보를 더욱 구체적ㅇ이고 명확하게 정의할 수 있다.
+  - 데이터의 변경 사항과 Outbox Table로의 이벤트 데이터 기록을 MySQL의 단일 트랜잭션으로 처리한다.
+  - 이벤트 전송이 필요한 Article, Comment, Like, View 서비스는 트랜잭션을 지원하는 MySQL을 사용하고 있기 때문에, Outbox 테이블과 트랜잭션을 통합하여 구현할 수 있다.
+- Transaction Outbox 설계
+  - 게시글 생성/수정/삭제 API => Article Service => Article Table 상태변경 + Outbox Table 이벤트 삽입 => MySQL(Transaction[Article Table, Outbox Table]) <= 미전송 이벤트 조회(Outbox Table, 10초 간격 polling) <= Ressage Relay => 이벤트 전송 => Kafka
+    - Message Relay가 Outbox Table을 10초 간격으로 polling 한다고 해도, 여전히 지연은 크다. 게시글 서비스에서 트랜잭션이 commit되면, Message Relay로 이벤트를 즉시전달하자. Message Relay는 전달 받은 이벤트를 비동기로 카프카에게 전송할 수 있다.
+    - Message Relay는 전송이 실패한 이벤트에 대해서만 Outbox Table에서 polling하면 된다. 그렇지 않으면, Message Relay로의 이벤트 전달될 수 있는 지점이 2개이므로 각 이벤트가 중복 처리될 수 있다.
+    - 실패한 이벤트는 장애 상황에만 발생할 것이고, 정상 상황에서는 10초 정도면 이벤트 전송할 시간으로 충분 했을 것이다. 생성된 지 10초가 지난 이벤트만 polling하자. 물론 여전히 이벤트는 중복 처리될 수 있으므로 Consumer 측에서 멱등성을 고려한 개발은 필요하다.
+    - 전송이 완료된 이벤트는 간단하게 Outbox Table에서 삭제할 것이다. 물론 이벤트를 비즈니스 관점에서 유의미할 수 있고, 이후에도 추적 또는 리플레이가 필요한 상황도 있다.(Event Sourcing)
+    - 게시글 서비스의 여러 서버 애플리케이션에서 동시에 처리될 수 있고, DB 샤딩이 고려된 분산 시스템이다. Message Relay가 Outbox Table의 미전송 이벤트를 polling하는 작업은 어떻게 처리될 수 있을까?
+      - 미전송 이벤트를 polling하는 것은 특정한 샤드 키가 없으므로, 모든 샤드에서 직접 polling해야 한다. 모든 애플리케이션이 동시에 polling하면, 동일한 이벤트를 중복으로 처리할 수도 있고, 각 애플리케이션마다 모든 샤드를 polling 하면, 처리에 지연이 생길 수 있다.
+      - 따라서 각 애플리케이션이 처리할 샤드를 중복 없이 적절히 분산할 필요가 있다. => 각 애플리케이션은 샤드의 일부만 할당 받아서 처리할 수 있도록 해보자. 이러한 할당은 Message Relay 내부의 Coordinator가 처리한다.
+      - Coordinator는 자신을 실행한 APP의 식별자와 현재 시간으로, 중앙 저장소에 3초 간격으로 ping을 보낸다. 이를 통해 Coordinator는 실행 중인 APP 목록을 파악하고, 각 APP에 샤드를 적절히 분산한다.
+      - 중앙 저장소는 마지막 ping을 받은지 9초가 지났으면 APP이 종료되었다고 판단하고 목록에서 제거한다. 중앙 저장소는 Redis의 Sorted Set을 이용한다. APP의 식별자와 마지막 ping 시간을 정렬된 상태로 저장해둘 수 있다.
+      - 우리는 샤딩을 직접 구현하진 않았지만, 4개의 샤드가 있다고 가정한다. Coordinator는 nrodml APP에 4개의 새드를 범위 기반(Range-Based)으로 할당한다. 예를 들어, 2개의 APP이 있다면, 0 ~ 1번 샤드와 2 ~ 3번 샤드를 각각 polling한다.
+      - 이러한 Message Relay는 모듈로 구현한다. 게시글/댓글/좋아요/조회수 서비스는 Message Relay Module 의존성만 추가하면, Transactional Messaging을 쉽게 구현할 수 있다.
