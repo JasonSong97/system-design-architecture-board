@@ -12,7 +12,6 @@ import kuke.board.common.event.EventType;
 import kuke.board.common.event.Snowflake;
 import kuke.board.common.event.payload.ArticleCreatedEventPayload;
 import kuke.board.common.event.payload.ArticleDeletedEventPayload;
-import kuke.board.common.event.payload.ArticleUpdatedEventPayload;
 import kuke.board.common.outboxmessagerelay.OutboxEventPublisher;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
