@@ -38,7 +38,7 @@ public class MessageRelayCoordinator {
                 .toList();
     }
 
-    @Scheduled(fixedRate = PING_INTERVAL_SECONDS, timeUnit = TimeUnit.SECONDS)
+    @Scheduled(fixedDelay = PING_INTERVAL_SECONDS, timeUnit = TimeUnit.SECONDS)
     public void ping() {
         redisTemplate.executePipelined((RedisCallback<?>) action -> {
             StringRedisConnection conn = (StringRedisConnection) action;

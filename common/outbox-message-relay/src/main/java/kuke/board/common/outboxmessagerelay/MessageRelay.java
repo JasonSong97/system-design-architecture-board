@@ -20,7 +20,6 @@ import java.util.concurrent.TimeoutException;
 @Slf4j
 @RequiredArgsConstructor
 public class MessageRelay {
-
     private final OutboxRepository outboxRepository;
     private final MessageRelayCoordinator messageRelayCoordinator;
     private final KafkaTemplate<String, String> messageRelayKafkaTemplate;
@@ -46,7 +45,7 @@ public class MessageRelay {
             ).get(1, TimeUnit.SECONDS);
             outboxRepository.delete(outbox);
         } catch (Exception e) {
-            log.error("[MessageRelay.publishEvent] outboxEvent={}", outbox, e);
+            log.error("[MessageRelay.publishEvent] outbox={}", outbox, e);
         }
     }
 
