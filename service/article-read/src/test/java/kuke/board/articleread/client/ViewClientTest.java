@@ -27,6 +27,7 @@ class ViewClientTest {
         viewClient.count(1L); // 로그 출력
     }
 
+    // 캐시 최적화 전략 구현 테스트 => 로그 확인 필요
     @Test
     void readCacheableMultiThreadTest() throws InterruptedException {
         ExecutorService executorService = Executors.newFixedThreadPool(5);
