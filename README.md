@@ -802,3 +802,53 @@ Outbox Table에 이벤트 데이터 기록과 비즈니스 로직에 의한 상�
 - 게시글 조회 서비스는 kafka로부터 게시글 생성/삭제 이벤트를 전달 받는다. // 게시글 서비스 => 이벤트 전송 => Kafka <= 게시글 조회 서비스 => Redis
   - 게시글 조회 서비스는 Kafka로부터 전달 받은 게시글 생성/삭제 이벤트로, Redis에 게시판별 게시글 목록을 저장한다. sorted set 자료구조를 활용하여 최신순 정렬을 1000개까지 유지한다. data = article_id, score = article_id(생성시간)
   - Client가 게시글 목록을 요청한다면? 최신글 1000건 이내의 목록 데이터는 게시글 조회 서비스의 Redis에서 가져오고, 이후의 데이터는 게시글 서비스에서 가져올 수 있다.
+
+### 캐시 최적화 전략 - 기존 캐시 전략의 제약
+- 현재 조회수에는 짧은 만료 시간을 가지는 캐시가 적용되어 있다. @Cacheable이 적용된다. 우리는 동시에 많은 트래픽이 몰려올 수도 있는 상황이다. 효율적인지 테스트가 필요하다.
+- 테스트코드를 작성한 결과, 캐시가 만료될 때마다 원본 데이터 서버에 여러 번 요청되고 있다. 동시 요청 시에 어떻게 동작하는 것일까? 
+  - Article Read Service 는 Cache를 관리하고, View Service 는 Origin Data를 관리한다. Client에 의해 동시 요청이 들어오는 상황을 살펴보자.
+  - Client -> Cache : 1번 요청 cache get
+  - Cache -> Client : 1번 요청 cache miss(캐시에서 데이터를 찾지 못함)
+  - Client -> Origin Data : 1번 요청 원본 데이터 접근(1번 요청은 캐시를 갱신하기 위해 원본 데이터에 접근)
+  - Origin Data -> Client : 1번 요청 원본 데이터 획득
+  - Client -> Cache : 2번 요청 cache get
+  - Cache -> Client : 2번 요청 cache miss(아직 캐시에 데이터가 없으므로 2번 요청도 cache miss)
+  - Client -> Origin Data : 2번 요청도 캐시 갱신을 위해 원본 데이터에 접근
+  - Origin Data -> Client : 2번 요청 원본 데이터 획득
+  - Client -> Cache : 1번 요청 cache put(이 시점에 1번 요청은 원본 데이터를 캐시에 적재한다.)
+  - Cache -> Client : 1번 요청은 정상적으로 캐시에 데이터를 적재하고, 데이터를 응답한다.
+  - Client -> Cache : 2번 요청도 원본 데이터를 캐시에 적재한다.
+  - Cache -> Client : 2번 요청도 정상적으로 캐시에 데이터를 적재하고, 데이터를 응답한다.
+- 위의 과정에서 원본 데이터에 접근하고 캐시에 데이터를 적재하는 과정은 두 번 수행됐다. 하지만 위 과정은 1번으로도 충분했다. 동시 요청이 많다면, 원본 데이터에 접근하는 과정이 무의미하게 많아질 수 있는 것이다.
+- 동시 트래픽이 몰리면, 캐시 만료 시에 원본 데이터에 접근하여 캐시 갱신이 필요하다. 원본 데이터 서버로 무수히 많은 요청이 전파될 수 밖에 없는 것이다.
+- 하지만 캐시 갱신은 1개의 요청에 대해서만 처리되어도 충분할 수 있다.
+
+### Request Collapsing
+- 위의 문제를 해결하기 위해서, 분산 시스템에서 캐시 갱신에 대해서 Lock을 획득한다면? 분산락을 활용하여 1개의 요청만 처리할 수 있다.
+- 다른 요청들은 캐시 갱신될 때까지 대기해야 하는가? 캐시 갱신이 길어지면, 다른 요청들은 무한히 기다려야할 수도 있다. => 대기로 인한 리소스 점유 및 낭비, 타임아웃 설정해볼 수 있으나 비효율적
+- 굳이 캐시 갱신을 기다리지 않고, 즉시 응답하면 되지 않을까?
+  - 데이터를 실제 만료로 설정된 시간보다 더 늦게 만료 시킨다면?
+    - 갱신을 위한 만료 시간(Logical TTL)과 실제 만료 시간(Physical TTL)을 다르게 가져가는 전략
+    - Logical TTL < Physical TTL
+    - Logical TTL 때문에 갱신을 수행하더라도, Physical TTL로 인해 데이터는 남아있으므로 즉시 응답할 수 있다.
+    - 예시) 사용자가 Logical TTL을 10초로 설정했다면, Physical TTL은 15초로 설정
+- Article Read Service는 Cache를 관리하고, View Service는 Origin Data를 관리한다. 이번에는 동시 요청을 방지하기 위해 분산락을 제공하는 Distributed Lock Provider가 함께 동작한다. Client에 의해 동시 요청이 들어오는 상황을 살펴보자.
+  - Client -> Cache : 1번 요청은 캐시에서 데이터를 조회한다.
+  - Cache -> Client : logical ttl은 초과되어서 logical cache miss로 판단하지만, physical ttl은 아직 지나지 않아 캐시에서 hit 된 데이터는 남아있다. 1번 요청 logical cache miss
+  - Client -> Distributed Lock Provider : 1번 요청은 Distributed Lock Provider에 락을 요청한다. 캐시에 데이터는 있었지만, logical ttl에 의해 아무튼 logical cache miss이므로, 원본 데이터에 접근하여 캐시를 갱신해야 한다.
+  - Distributed Lock Provider -> Client : 1번 요청은 락을 획득한다. 락을 획득 했으므로 캐시를 갱신할 책임이 있는 것이다.
+  - Client -> Cache : 이어서 2번 요청이 들어와서 캐시를 조회한다.
+  - Cache -> Client : logical ttl은 초과되어서 cache miss지만, physical ttl은 여전히 지나지 않아서 캐시에 데이터는 남아있다.
+  - Client -> Distributed Lock Provider : 2번 요청도 Distributed Lock Provider에 락을 요청한다.
+  - Distributed Lock Provider -> Client : 하지만 1번 요청에서 이미 락을 획득 했으므로, 2번 요청은 락 획득에 실팰한다. 캐시에서 logical ttl은 초과했지만, physical ttl은 아직 초과되지 않아서 조회된 데이터를 그대로 응답한다.
+  - Client -> Origin Data : 1번 요청은 락을 획득 했으므로, 캐시를 갱신할 책임이 있다. 원본 데이터에 접근한다.
+  - Origin Data -> Client : 1번 요청은 원본 데이터를 정상적으로 획득한다.
+  - Client -> Cache : 1번 요청은 캐시에 데이터를 적재한다.
+  - Cache -> Client : 1번 요청은 데이터를 응답한다.
+- 이번에는 원본 데이터 접근이 1번만 수행되었다. 캐시 갱신에 대해 분산 락을 획득함으로써, 중복 수행을 방지한 것이다.
+- Distributed Lock Provider로 락을 요청하는 과정이 추가되었지만, 원본 데이터를 다시 캐시에 적재하는 과정보다 훨씬 빠르게 수행될 수 있다.
+- `Distributed Lock Provider`
+  - 이전과 동일하게 Redis의 setIfAbsent 연산으로 빠르게 처리할 수 있다.
+  - 물론, 이러한 캐시 최적화 전략은 모든 경우에서 사용할 수는 없다. logical ttl과 physical ttl이 다르므로, 갱신이 처리 되기 전까지 과거 데이터가 일시적으로 노출될 수 있기 때문이다.
+  - 하지만 조회수와 같이 캐시 만료 시간이 아주 짧으면서 실시간 데이터 일관성이 반드시 중요하지 않은 작업, 또는 원본 데이터를 처리하는 게 아주 무거운 작업이면, 무의미할 수 있는 중복된 요청 트래픽을 줄임으로써 많은 이점을 가져올 수 있다.
+  - 또한 원본 데이터 서버에 부할를 줄이면서도, 캐시를 적극 활용하며 조회 성능을 최적화하는데 유리해질 수 있는 것, 이렇게 여러 개의 동일하거나 유사한 요청을 하나의 요청을 병합하여 처리하는 기업을 Requert Collapsing
