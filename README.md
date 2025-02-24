@@ -1,4 +1,4 @@
-# System Design Architecture Board
+# System Design Architecture Board 목차
 
 ## 요구사항
 - 게시글
@@ -35,68 +35,90 @@
   - 게시글 목록 조회 최적화
   - 캐시 최적화 전략(조회에 최적화된 캐시 전략 구성)
 
+---
+
 ## 테이블 설계
 ### article
-- article_id | BIGINT | PK
-- title | VARCHAR(100) | 제목
-- content | VARCHAR(3000) | 내용
-- board_id | BIGINT | 게시판 ID(Shard Key)
-- writer_id | BIGINT | 작성자 ID
-- created_at | DATETIME | 생성시간
-- modified_at | DATETIME | 수정시간
+| column | data type | explain |
+|--------|-----------|---------|
+| article_id | BIGINT | PK |
+| title | VARCHAR(100) | 제목 |
+| content | VARCHAR(3000) | 내용 |
+| board_id | BIGINT | 게시판 ID(Shard Key) |
+| writer_id | BIGINT | 작성자 ID |
+| created_at | DATETIME | 수정시간 |
+| modified_at | DATETIME | 수정시간 |
 
 ### comment
-- comment_id | BIGINT | PK
-- content | VARCHAR(3000) | 내용
-- article_id | BIGINT | 게시글 ID(Shard Key)
-- parent_comment_id | BIGINT | 상위 댓글 ID
-- writer_id | BIGINT | 작성자 ID
-- deleted | BOOL | 삭제여부
-- created_at | DATETIME | 생성시간
+| column | data type | explain |
+|--------|-----------|---------|
+| comment_id | BIGINT | PK |
+| content | VARCHAR(3000) | 내용 |
+| article_id | BIGINT | 게시글 ID(Shard Key) |
+| parent_comment_id | BIGINT | 상위 댓글 ID |
+| writer_id | BIGINT | 작성자 ID |
+| deleted | BOOL | 삭제여부 |
+| created_at | DATETIME | 생성시간 |
 
 ### comment_v2
-- comment_id | BIGINT | PK
-- content | VARCHAR(3000) | 내용
-- article_id | BIGINT | 게시글 ID(Shard Key)
-- writer_id | BIGINT | 작성자 ID
-- path | VARCHAR(25) | 경로(무한뎁스가 가능 하지만, 그냥 제한으로 5뎁스 까지만)
-- deleted | BOOL | 삭제여부
-- created_at | DATETIME | 생성시간
+| column | data type | explain |
+|--------|-----------|---------|
+| comment_id | BIGINT | PK |
+| content | VARCHAR(3000) | 내용 |
+| article_id | BIGINT | 게시글 ID(Shard Key) |
+| path | VARCHAR(25) | 경로(무한뎁스가 가능 하지만, 그냥 제한으로 5뎁스 까지만) |
+| writer_id | BIGINT | 작성자 ID |
+| deleted | BOOL | 삭제여부 |
+| created_at | DATETIME | 생성시간 |
 
 ### article_like
-- article_like_id | BIGINT | PK
-- article_id | BIGINT | 게시글 ID(Shard Key)
-- user_id | BIGINT | 사용자 ID
-- created_at | DATETIME | 생성 시간
+| column | data type | explain |
+|--------|-----------|---------|
+| article_like_id | BIGINT | PK |
+| article_id | BIGINT | 게시글 ID(Shard Key) |
+| user_id | BIGINT | 사용자 ID |
+| created_at | DATETIME | 생성시간 |
 
 ### article_like_count
-- article_id | BIGINT | PK(Shard Key) => article_like 테이블과 동일한 샤드에서 트랜잭션 처리 위함
-- like_count | BIGINT | 좋아요 수
-- version | BIGINT | 낙관적 락 버전 컬럼
+| column | data type | explain |
+|--------|-----------|---------|
+| article_id | BIGINT | PK(Shard Key) => article_like 테이블과 동일한 샤드에서 트랜잭션 처리 위함 |
+| like_count | BIGINT | 좋아요 수 |
+| version | BIGINT | 낙관적 락 버전 컬럼 |
 
 ### board_article_count
-- board_id | BIGINT | PK(Shard Key) => 게시글 서비스의 article 테이블과 동일한 샤드 키
-- article_count | BIGINT | 게시글 수
+| column | data type | explain |
+|--------|-----------|---------|
+| board_id | BIGINT | PK(Shard Key) => 게시글 서비스의 article 테이블과 동일한 샤드 키 |
+| article_count | BIGINT | 게시글 수 |
 
 ### article_comment_count
-- article_id | BIGINT | PK(Shard Key) => 댓글 서비스의 comment 테이블과 동일한 샤드 키
-- comment_count | BIGINT | 댓글 수
+| column | data type | explain |
+|--------|-----------|---------|
+| article_id | BIGINT | PK(Shard Key) => 댓글 서비스의 comment 테이블과 동일한 샤드 키 |
+| comment_count | BIGINT | 댓글 수 |
 
 ### article_view_count
-- article_id | BIGINT | PK(Shard Key)
-- view_count | BIGINT | 조회수
+| column | data type | explain |
+|--------|-----------|---------|
+| article_id | BIGINT | PK(Shard Key) |
+| view_count | BIGINT | 조회수 |
 
 ### outbox
-- outbox_id | BIGINT | PK(Shard Key)
-- event_type | VARCHAR(100) | 이벤트 타입
-- payload | VARCHAR(5000) | 이벤트 데이터
-- shard_key | BIGINT | 샤드 키
-- created_at | DATETIME | 생성일시
+| column | data type | explain |
+|--------|-----------|---------|
+| outbox_id | BIGINT | PK |
+| event_type | VARCHAR(100) | 이벤트 타입 |
+| payload | VARCHAR(5000) | 이벤트 데이터 |
+| shard_key | BIGINT | 샤드 키 |
+| created_at | DATETIME | 생성일시 |
 
 ```
 샤딩이 고려된 DB + 트랜잭션은 각 샤드에서 단일 트랜잭션으로 빠르고 안전하게 수행 + 여러 샤드간에 분산 트랜잭션을 지원하는 DB도 있으나, 성능이 다소 떨어짐
 Outbox Table에 이벤트 데이터 기록과 비즈니스 로직에 의한 상태 변경이 동일한 샤드에서 단일 트랜잭션으로 처리될 수 있도록 함
 ```
+
+---
 
 ## 1. 대규모 시스템 서버 인프라 기초
 
